@@ -1,12 +1,11 @@
-import makeWASocket from "@whiskeysockets/baileys";
-import { useMultiFileAuthState } from "@whiskeysockets/baileys";
+import makeWASocket, { useMultiFileAuthState } from "@whiskeysockets/baileys";
 import fetch from "node-fetch";
 import fs from "fs";
 
-// ✅ Load auth state
+// === Load auth state ===
 const { state, saveCreds } = await useMultiFileAuthState("auth_info");
 
-// ✅ Gemini AI function
+// === Gemini AI function ===
 async function askGemini(question) {
   try {
     const response = await fetch(
@@ -36,7 +35,7 @@ async function askGemini(question) {
   }
 }
 
-// ✅ Store greeted users
+// === Store greeted users (hi once per user) ===
 const greetedFile = "greeted.json";
 let greetedUsers = fs.existsSync(greetedFile)
   ? JSON.parse(fs.readFileSync(greetedFile))
@@ -46,27 +45,41 @@ function saveGreeted() {
   fs.writeFileSync(greetedFile, JSON.stringify(greetedUsers, null, 2));
 }
 
-// ✅ Main bot
+// === Main Bot ===
 async function startBot() {
   const sock = makeWASocket({ auth: state });
 
+  // Save credentials on update
   sock.ev.on("creds.update", saveCreds);
 
   sock.ev.on("connection.update", (update) => {
     const { connection } = update;
-    if (connection === "open") {
-      console.log("✅ Connected to WhatsApp");
-    }
+    if (connection === "open") console.log("✅ Connected to WhatsApp");
+    else console.log("⚠️ Connection update:", connection);
   });
 
   sock.ev.on("messages.upsert", async ({ messages }) => {
     const msg = messages[0];
-    if (!msg.message?.conversation) return;
+    if (!msg.message) return;
 
-    const text = msg.message.conversation.trim();
     const sender = msg.key.remoteJid;
 
-    // Reply "hi" only once per user
+    // Ignore groups
+    if (sender.endsWith("@g.us")) return;
+
+    const text =
+      msg.message.conversation ||
+      msg.message.extendedTextMessage?.text ||
+      msg.message?.imageMessage?.caption ||
+      msg.message?.videoMessage?.caption ||
+      msg.message?.buttonsResponseMessage?.selectedDisplayText ||
+      msg.message?.listResponseMessage?.singleSelectReply?.selectedDisplayText;
+
+    if (!text) return;
+
+    console.log("📩 New message from", sender, ":", text);
+
+    // Reply hi only once per user
     if (text.toLowerCase() === "hi") {
       if (!greetedUsers[sender]) {
         greetedUsers[sender] = true;
@@ -76,11 +89,13 @@ async function startBot() {
       return;
     }
 
-    // AI replies only to questions
+    // Reply AI for questions
     if (
       text.endsWith("?") ||
       text.toLowerCase().startsWith("who") ||
-      text.toLowerCase().startsWith("what")
+      text.toLowerCase().startsWith("what") ||
+      text.toLowerCase().startsWith("how") ||
+      text.toLowerCase().startsWith("why")
     ) {
       const reply = await askGemini(text);
       await sock.sendMessage(sender, { text: reply });
